@@ -1,32 +1,33 @@
--- reload.lua: automatic reloading of network stream when cache doesn't load.
+-- reload.lua: automatic reloading of network stream when cache doesn't fill.
 --
 --
 -- We monitor two caches, the stream cache and the demuxer cache, and when
 -- either doesn't see progress for some time we do a reload of the stream url.
 --
--- Those times are s.max for the stream cache, and d.max for the demuxer cache,
--- where we choose those values to be a couple of seconds apart, with the latter
--- being the higher one.
+-- More precisely, through a timer we monitor the demuxer cache and count in
+-- d.total how many seconds it might have seen no progress, consecutively.
 --
--- The monitoring of either is connected to a timer, governed by s.interval for
--- the stream and d.interval for the demuxer cache. Setting either (or both) of
--- those interval values to 0 disables the associated monitoring entirely.
+-- Then we observe the pause state of the stream cache. If it gets paused we
+-- start a timer and count the seconds s.total during which it stays in paused
+-- state. And as soon as d.total + s.total > max we do a reload. So max is the
+-- upper bound in seconds of how long both caches combined can be in a stale
+-- state before a reload occurs.
 --
 --
 
-local msg  = require 'mp.msg'
-local s    = {} -- stream cache table
-local d    = {} -- demuxer cache table
-local path = "" -- stream url
+local msg    = require 'mp.msg'
+local max    = 16   -- reload after this many seconds
+local s      = {}   -- stream cache table
+local d      = {}   -- demuxer cache table
+local path   = ""   -- stream url
+local notify = true -- use notify-send for desktop notification
 
 -- stream cache handling
-s.interval = 2  -- set to 0 to disable stream cache monitoring
-s.max      = 16 -- reload after this many seconds
+s.interval = 2  -- timer interval. set to 0 to disable reloading altogether
 s.total    = 0
 s.timer    = nil
 -- demuxer cache handling
-d.interval = 4  -- set to 0 to disable demuxer cache monitoring
-d.max      = 19 -- reload after this many seconds
+d.interval = 3  -- timer interval. set to 0 to disable demuxer cache monitoring
 d.last     = 0
 d.total    = 0
 d.timer    = nil
@@ -56,13 +57,6 @@ function d.tick()
       d.last = cache_time
    end
 
-   if d.total > d.max and not (s.timer and s.timer:is_enabled()) then
-      msg.info('d.tick reload')
-      reload()
-      if mp.get_property_native('core-idle') then
-         msg.debug('d.tick core idle')
-      end
-   end
 end
 
 
@@ -72,13 +66,23 @@ end
 function s.reset()
    msg.debug("s.reset")
    s.total = 0
-   if s.timer then s.timer:kill() end
+   if s.timer and s.timer:is_enabled() then
+      s.timer:kill()
+   end
 end
 
 -- to be called by observe_property function
 function s.handler(property, is_paused)
 
-   if is_paused then
+   msg.debug("s.handler is_paused", is_paused)
+
+   if is_paused == true then
+
+      -- take account of how long the demuxer cache might have been stale
+      -- already
+      msg.debug("s.handler d.total", d.total)
+      s.total = d.total
+
       if not s.timer then
          msg.debug("s.handler create s.timer")
          s.timer = mp.add_periodic_timer(
@@ -86,7 +90,7 @@ function s.handler(property, is_paused)
             function()
                s.total = s.total + s.interval
                msg.debug("s.timer", s.total)
-               if s.total > s.max then
+               if s.total > max then
                   msg.info('s.handler reload')
                   reload()
                end
@@ -95,11 +99,15 @@ function s.handler(property, is_paused)
       elseif not s.timer:is_enabled() then
          msg.debug("s.handler resume s.timer")
          s.timer:resume()
+      else
+         msg.info('s.handler timer enabled')
       end
-   else
+
+   elseif is_paused == false then
       msg.debug("s.handler reset")
       s.reset()
    end
+
 end
 
 
@@ -114,7 +122,15 @@ function reload()
    s.reset()
    d.reset()
 
-   os.execute('notify-send -t 0 -u low "mpv reload"')
+   -- desktop notification
+   if notfify then
+      -- continue script if notify-send call fails
+      pcall(
+         function()
+            os.execute('notify-send -t 0 -u low "mpv reload"')
+         end
+      )
+   end
 
    if fformat and time_pos and fformat ~= "hls" then
       msg.info("reload", path, time_pos)
@@ -142,7 +158,9 @@ mp.add_hook(
    "on_load",
    10,
    function ()
-      path = mp.get_property("stream-open-filename")
+      if path == "" then
+         path = mp.get_property("stream-open-filename")
+      end
       msg.info("path", path)
    end
 )
