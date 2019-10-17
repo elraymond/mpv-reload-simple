@@ -16,20 +16,20 @@
 --
 
 local msg    = require 'mp.msg'
-local max    = 16   -- reload after this many seconds
+local max    = 16   -- reload after this many seconds of stale caches
 local s      = {}   -- stream cache table
 local d      = {}   -- demuxer cache table
-local path   = ""   -- stream url
+local path   = ""   -- stream url, gets initialized on load
 local notify = true -- use notify-send for desktop notification
 
 -- stream cache handling
-s.interval = 2  -- timer interval. set to 0 to disable reloading altogether
-s.total    = 0
+s.interval = 2  -- timer interval; set to 0 to disable reloading altogether
+s.total    = 0  -- total of seconds the player has been in cache paused state
 s.timer    = nil
 -- demuxer cache handling
-d.interval = 3  -- timer interval. set to 0 to disable demuxer cache monitoring
-d.last     = 0
-d.total    = 0
+d.interval = 3  -- timer interval; set to 0 to disable demuxer cache monitoring
+d.last     = 0  -- last demuxer-cache-time we have seen
+d.total    = 0  -- count of how many seconds d.last has been the same
 d.timer    = nil
 
 
@@ -80,8 +80,10 @@ function s.handler(property, is_paused)
 
       -- take account of how long the demuxer cache might have been stale
       -- already
-      msg.debug("s.handler d.total", d.total)
-      s.total = d.total
+      if s.total == 0 then
+         msg.debug("s.handler d.total", d.total)
+         s.total = d.total
+      end
 
       if not s.timer then
          msg.debug("s.handler create s.timer")
@@ -160,8 +162,8 @@ mp.add_hook(
    function ()
       if path == "" then
          path = mp.get_property("stream-open-filename")
+         msg.info("path", path)
       end
-      msg.info("path", path)
    end
 )
 
