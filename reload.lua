@@ -1,19 +1,35 @@
+-- reload.lua: automatic reloading of network stream when cache doesn't load.
+--
+--
+-- We monitor two caches, the stream cache and the demuxer cache, and when
+-- either doesn't see progress for some time we do a reload of the stream url.
+--
+-- Those times are s.max for the stream cache, and d.max for the demuxer cache,
+-- where we choose those values to be a couple of seconds apart, with the latter
+-- being the higher one.
+--
+-- The monitoring of either is connected to a timer, governed by s.interval for
+-- the stream and d.interval for the demuxer cache. Setting either (or both) of
+-- those interval values to 0 disables the associated monitoring entirely.
+--
+--
+
 local msg  = require 'mp.msg'
-local p    = {}
-local d    = {}
+local s    = {} -- stream cache table
+local d    = {} -- demuxer cache table
 local path = "" -- stream url
--- cache pause event handling
-p.interval = 2  -- set to 0 to disable
-p.max      = 16 -- reload after this many seconds
-p.total    = 0
-p.timer    = nil
+
+-- stream cache handling
+s.interval = 2  -- set to 0 to disable stream cache monitoring
+s.max      = 16 -- reload after this many seconds
+s.total    = 0
+s.timer    = nil
 -- demuxer cache handling
-d.interval = 4  -- set to 0 to disable
+d.interval = 4  -- set to 0 to disable demuxer cache monitoring
 d.max      = 19 -- reload after this many seconds
 d.last     = 0
 d.total    = 0
 d.timer    = nil
-
 
 
 --
@@ -40,46 +56,49 @@ function d.tick()
       d.last = cache_time
    end
 
-   if d.total > d.max and not (p.timer and p.timer:is_enabled()) then
+   if d.total > d.max and not (s.timer and s.timer:is_enabled()) then
       msg.info('d.tick reload')
       reload()
+      if mp.get_property_native('core-idle') then
+         msg.debug('d.tick core idle')
+      end
    end
 end
 
 
 --
--- cache pause event related functions
+-- stream cache related functions
 --
-function p.reset()
-   msg.debug("p.reset")
-   p.total = 0
-   if p.timer then p.timer:kill() end
+function s.reset()
+   msg.debug("s.reset")
+   s.total = 0
+   if s.timer then s.timer:kill() end
 end
 
 -- to be called by observe_property function
-function p.handler(property, is_paused)
+function s.handler(property, is_paused)
 
    if is_paused then
-      if not p.timer then
-         msg.debug("p.handler create p.timer")
-         p.timer = mp.add_periodic_timer(
-            p.interval,
+      if not s.timer then
+         msg.debug("s.handler create s.timer")
+         s.timer = mp.add_periodic_timer(
+            s.interval,
             function()
-               p.total = p.total + p.interval
-               msg.debug("p.timer", p.total)
-               if p.total > p.max then
-                  msg.info('p.handler reload')
+               s.total = s.total + s.interval
+               msg.debug("s.timer", s.total)
+               if s.total > s.max then
+                  msg.info('s.handler reload')
                   reload()
                end
             end
          )
-      elseif not p.timer:is_enabled() then
-         msg.debug("p.handler resume p.timer")
-         p.timer:resume()
+      elseif not s.timer:is_enabled() then
+         msg.debug("s.handler resume s.timer")
+         s.timer:resume()
       end
    else
-      msg.debug("p.handler reset")
-      p.reset()
+      msg.debug("s.handler reset")
+      s.reset()
    end
 end
 
@@ -92,7 +111,7 @@ function reload()
    local time_pos = mp.get_property("time-pos")
    local fformat  = mp.get_property("file-format")
 
-   p.reset()
+   s.reset()
    d.reset()
 
    os.execute('notify-send -t 0 -u low "mpv reload"')
@@ -118,7 +137,7 @@ end
 mp.set_property("idle",         "yes")
 mp.set_property("force-window", "yes")
 
--- store stream url in path variable
+-- on player startup, store stream url in path variable
 mp.add_hook(
    "on_load",
    10,
@@ -129,8 +148,8 @@ mp.add_hook(
 )
 
 -- cache pause event handling
-if p.interval then
-   mp.observe_property("paused-for-cache", "bool", p.handler)
+if s.interval then
+   mp.observe_property("paused-for-cache", "bool", s.handler)
 end
 
 -- demuxer cache handling
