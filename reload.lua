@@ -1,33 +1,50 @@
 -- reload.lua: automatic reloading of network stream when cache doesn't fill.
 --
 --
--- We monitor two caches, the stream cache and the demuxer cache, and when
--- either doesn't see progress for some time we do a reload of the stream url.
+-- Generally we react to situations when the player pauses itself because the
+-- cache runs empty (event paused-for-cache is fired). When this happens, we
+-- start a timer and wait s.max seconds for the player to unpause itself, and
+-- when that doesn't happen we do a reload of the stream. So when the player
+-- gets stuck, s.max is the maximum time, in seconds, we're willing to wait
+-- before performing a reload.
 --
--- More precisely, through a timer we monitor the demuxer cache and count in
--- d.total how many seconds it might have seen no progress, consecutively.
+-- Additionally, we also monitor the demuxer cache, and how long it didn't
+-- receive any updates. And if this time surpasses d.max, we don't even start a
+-- timer in the above scenario but reload immediately when the player gets
+-- paused. So we choose d.max so that it's a good indicator that the stream
+-- indeed is somehow stuck. For HLS streams this value should probably be chosen
+-- according to chunk size, but 20 seconds is probably a reasonable number.
 --
--- Then we observe the pause state of the stream cache. If it gets paused we
--- start a timer and count the seconds s.total during which it stays in paused
--- state. And as soon as d.total + s.total > max we do a reload. So max is the
--- upper bound in seconds of how long both caches combined can be in a stale
--- state before a reload occurs.
+-- Finally, if we do a reload and it fails there's nothing to play, and mpv
+-- would normally shut down. We set the "idle" and "force-window" parameters
+-- though, so that the player does stay open. On the other hand, with nothing to
+-- play there won't be any pause/unpause events anymore, so that's why we allow
+-- for another reload in the demuxer cache timer function, which is performed
+-- when the demuxer cache has been stale for d.max seconds and the player is
+-- otherwise idle. With this approach, we keep performing reloads each d.max
+-- seconds even when one or more reloads fail, so that hopefully sometime the
+-- stream comes back.
+--
+-- And that's already pretty much all this script does. So s.max and d.max are
+-- the two values you might want to tune according to your needs.
 --
 --
 
+
 local msg    = require 'mp.msg'
-local max    = 16   -- reload after this many seconds of stale caches
 local s      = {}   -- stream cache table
 local d      = {}   -- demuxer cache table
 local path   = ""   -- stream url, gets initialized on load
 local notify = true -- use notify-send for desktop notification
 
--- stream cache handling
+-- stream cache handling, times in seconds
 s.interval = 2  -- timer interval; set to 0 to disable reloading altogether
+s.max      = 10 -- how long to wait for paused stream to unpause before reload
 s.total    = 0  -- total of seconds the player has been in cache paused state
 s.timer    = nil
--- demuxer cache handling
-d.interval = 3  -- timer interval; set to 0 to disable demuxer cache monitoring
+-- demuxer cache handling, times in seconds
+d.interval = 4  -- timer interval; set to 0 to disable demuxer cache monitoring
+d.max      = 20 -- stuck time of demuxer cache considered reload worthy
 d.last     = 0  -- last demuxer-cache-time we have seen
 d.total    = 0  -- count of how many seconds d.last has been the same
 d.timer    = nil
@@ -57,6 +74,16 @@ function d.tick()
       d.last = cache_time
    end
 
+   -- when the stream, like an m3u8, goes empty then the paused-for-cache event
+   -- isn't being fired anymore, so we need a fallback reload for that case
+   if
+      d.total >= d.max
+      and not (s.timer and s.timer:is_enabled())
+      and mp.get_property_native('idle-active')
+   then
+         msg.debug('d.tick reload', d.total, s.total)
+         reload()
+   end
 end
 
 
@@ -78,22 +105,22 @@ function s.handler(property, is_paused)
 
    if is_paused == true then
 
-      -- take account of how long the demuxer cache might have been stale
-      -- already
-      if s.total == 0 then
-         msg.debug("s.handler d.total", d.total)
-         s.total = d.total
-      end
-
-      if not s.timer then
+      -- playback is paused and demuxer cache has been stale for a while ->
+      -- immediate reload
+      if d.total >= d.max then
+         msg.debug("s.handler demuxer reload", d.total, s.total)
+         reload()
+      -- else create/resume timer, to give player a chance to unpause before
+      -- reload
+      elseif not s.timer then
          msg.debug("s.handler create s.timer")
          s.timer = mp.add_periodic_timer(
             s.interval,
             function()
                s.total = s.total + s.interval
                msg.debug("s.timer", s.total)
-               if s.total > max then
-                  msg.info('s.handler reload')
+               if s.total >= s.max then
+                  msg.info('s.handler timer reload', d.total, s.total)
                   reload()
                end
             end
@@ -102,9 +129,11 @@ function s.handler(property, is_paused)
          msg.debug("s.handler resume s.timer")
          s.timer:resume()
       else
+         -- can consecutive pause events happen?
          msg.info('s.handler timer enabled')
       end
 
+   -- player unpaused, stop timer and reset counters
    elseif is_paused == false then
       msg.debug("s.handler reset")
       s.reset()
@@ -125,8 +154,8 @@ function reload()
    d.reset()
 
    -- desktop notification
-   if notfify then
-      -- continue script if notify-send call fails
+   if notify then
+      -- continue script execution if notify-send call fails
       pcall(
          function()
             os.execute('notify-send -t 0 -u low "mpv reload"')
