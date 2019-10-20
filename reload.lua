@@ -198,12 +198,12 @@ mp.add_hook(
 )
 
 -- cache pause event handling
-if s.interval then
+if s.interval > 0 then
    mp.observe_property("paused-for-cache", "bool", s.handler)
 end
 
 -- demuxer cache handling
-if d.interval then
+if d.interval > 0 then
    d.timer = mp.add_periodic_timer(
       d.interval,
       function()
