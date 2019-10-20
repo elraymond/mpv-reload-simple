@@ -86,7 +86,7 @@ function d.tick()
       -- and mp.get_property_native('idle-active')
    then
          msg.debug('d.tick reload', d.total, s.total)
-         reload()
+         reload(path)
    end
 end
 
@@ -113,7 +113,7 @@ function s.handler(property, is_paused)
       -- immediate reload
       if d.total >= d.max then
          msg.debug("s.handler demuxer reload", d.total, s.total)
-         reload()
+         reload(path)
       -- else create/resume timer, to give player a chance to unpause before
       -- reload
       elseif not s.timer then
@@ -125,7 +125,7 @@ function s.handler(property, is_paused)
                msg.debug("s.timer", s.total)
                if s.total >= s.max then
                   msg.info('s.handler timer reload', d.total, s.total)
-                  reload()
+                  reload(path)
                end
             end
          )
@@ -162,24 +162,24 @@ function desktop_notify(msg)
    end
 end
 
-function reload()
+function reload(loadpath)
 
    local time_pos = mp.get_property("time-pos")
-   local fformat  = mp.get_property("file-format")
+   local seekable = mp.get_property_native('seekable')
 
    s.reset()
    d.reset()
 
    desktop_notify("mpv reload")
 
-   if fformat and time_pos and fformat ~= "hls" then
-      msg.info("reload", path, time_pos)
-      mp.osd_message("Reload: " .. path .. " " .. time_pos)
-      mp.commandv("loadfile", path, "replace", "start=+" .. time_pos)
+   if time_pos and seekable then
+      msg.info("reload", loadpath, time_pos)
+      mp.osd_message("Reload: " .. loadpath .. " " .. time_pos)
+      mp.commandv("loadfile", loadpath, "replace", "start=+" .. time_pos)
    else
-      msg.info("reload", path)
-      mp.osd_message("Reload: " .. path)
-      mp.commandv("loadfile", path, "replace")
+      msg.info("reload", loadpath)
+      mp.osd_message("Reload: " .. loadpath)
+      mp.commandv("loadfile", loadpath, "replace")
    end
 end
 
