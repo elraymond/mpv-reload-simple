@@ -32,17 +32,10 @@
 
 
 local msg    = require 'mp.msg'
-local s      = {}   -- stream cache table
 local d      = {}   -- demuxer cache table
 local path   = ""   -- stream url, gets initialized on load
 local notify = true -- use notify-send for desktop notification
 
--- stream cache handling, times in seconds
-s.interval = 2  -- timer interval; set to 0 to disable reloading altogether
-s.interval = 0  -- timer interval; set to 0 to disable reloading altogether
-s.max      = 10 -- how long to wait for paused stream to unpause before reload
-s.total    = 0  -- total of seconds the player has been in cache paused state
-s.timer    = nil
 -- demuxer cache handling, times in seconds
 d.interval = 4  -- timer interval; set to 0 to disable demuxer cache monitoring
 d.max      = 15 -- stuck time of demuxer cache considered reload worthy
@@ -80,69 +73,11 @@ function d.tick()
    -- when the stream, like an m3u8, goes empty then the paused-for-cache event
    -- isn't being fired anymore, so we need a fallback reload for that case
    if
-      d.total >= d.max
-      and cache_duration < d.min
-      and not (s.timer and s.timer:is_enabled())
-      -- and mp.get_property_native('idle-active')
+      d.total >= d.max and cache_duration < d.min
    then
-         msg.debug('d.tick reload', d.total, s.total)
+         msg.debug('d.tick reload', d.total)
          reload(path)
    end
-end
-
-
---
--- stream cache related functions
---
-function s.reset()
-   msg.debug("s.reset")
-   s.total = 0
-   if s.timer and s.timer:is_enabled() then
-      s.timer:kill()
-   end
-end
-
--- to be called by observe_property function
-function s.handler(property, is_paused)
-
-   msg.debug("s.handler is_paused", is_paused)
-
-   if is_paused == true then
-
-      -- playback is paused and demuxer cache has been stale for a while ->
-      -- immediate reload
-      if d.total >= d.max then
-         msg.debug("s.handler demuxer reload", d.total, s.total)
-         reload(path)
-      -- else create/resume timer, to give player a chance to unpause before
-      -- reload
-      elseif not s.timer then
-         msg.debug("s.handler create s.timer")
-         s.timer = mp.add_periodic_timer(
-            s.interval,
-            function()
-               s.total = s.total + s.interval
-               msg.debug("s.timer", s.total)
-               if s.total >= s.max then
-                  msg.info('s.handler timer reload', d.total, s.total)
-                  reload(path)
-               end
-            end
-         )
-      elseif not s.timer:is_enabled() then
-         msg.debug("s.handler resume s.timer")
-         s.timer:resume()
-      else
-         -- can consecutive pause events happen?
-         msg.info('s.handler timer enabled')
-      end
-
-   -- player unpaused, stop timer and reset counters
-   elseif is_paused == false then
-      msg.debug("s.handler reset")
-      s.reset()
-   end
-
 end
 
 
@@ -167,9 +102,7 @@ function reload(loadpath)
    local time_pos = mp.get_property("time-pos")
    local seekable = mp.get_property_native('seekable')
 
-   s.reset()
    d.reset()
-
    desktop_notify("mpv reload")
 
    if time_pos and seekable then
@@ -204,11 +137,6 @@ mp.add_hook(
       end
    end
 )
-
--- cache pause event handling
-if s.interval > 0 then
-   mp.observe_property("paused-for-cache", "bool", s.handler)
-end
 
 -- demuxer cache handling
 if d.interval > 0 then
