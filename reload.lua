@@ -45,7 +45,8 @@ s.total    = 0  -- total of seconds the player has been in cache paused state
 s.timer    = nil
 -- demuxer cache handling, times in seconds
 d.interval = 4  -- timer interval; set to 0 to disable demuxer cache monitoring
-d.max      = 20 -- stuck time of demuxer cache considered reload worthy
+d.max      = 15 -- stuck time of demuxer cache considered reload worthy
+d.min      = 6  --
 d.last     = 0  -- last demuxer-cache-time we have seen
 d.total    = 0  -- count of how many seconds d.last has been the same
 d.timer    = nil
@@ -63,8 +64,9 @@ end
 -- to be called by timer
 function d.tick()
 
-   local cache_time = mp.get_property_native('demuxer-cache-time') or -1
-   local ct_rounded = string.format("%8.2f", cache_time)
+   local cache_time     = mp.get_property_native('demuxer-cache-time') or -1
+   local cache_duration = mp.get_property_native('demuxer-cache-duration') or -1
+   local ct_rounded     = string.format("%8.2f/%4.1f", cache_time, cache_duration)
 
    if cache_time == d.last then
       msg.debug('d.tick stuck', ct_rounded)
@@ -79,6 +81,7 @@ function d.tick()
    -- isn't being fired anymore, so we need a fallback reload for that case
    if
       d.total >= d.max
+      and cache_duration < d.min
       and not (s.timer and s.timer:is_enabled())
       -- and mp.get_property_native('idle-active')
    then
