@@ -149,6 +149,19 @@ end
 --
 -- general functions
 --
+
+-- desktop notification
+function desktop_notify(msg)
+   if notify then
+      -- continue script execution if notify-send call fails
+      pcall(
+         function()
+            os.execute('notify-send -t 0 -u low "' .. msg .. '"')
+         end
+      )
+   end
+end
+
 function reload()
 
    local time_pos = mp.get_property("time-pos")
@@ -157,15 +170,7 @@ function reload()
    s.reset()
    d.reset()
 
-   -- desktop notification
-   if notify then
-      -- continue script execution if notify-send call fails
-      pcall(
-         function()
-            os.execute('notify-send -t 0 -u low "mpv reload"')
-         end
-      )
-   end
+   desktop_notify("mpv reload")
 
    if fformat and time_pos and fformat ~= "hls" then
       msg.info("reload", path, time_pos)
