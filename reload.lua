@@ -39,6 +39,7 @@ local notify = true -- use notify-send for desktop notification
 
 -- stream cache handling, times in seconds
 s.interval = 2  -- timer interval; set to 0 to disable reloading altogether
+s.interval = 0  -- timer interval; set to 0 to disable reloading altogether
 s.max      = 10 -- how long to wait for paused stream to unpause before reload
 s.total    = 0  -- total of seconds the player has been in cache paused state
 s.timer    = nil
@@ -79,7 +80,7 @@ function d.tick()
    if
       d.total >= d.max
       and not (s.timer and s.timer:is_enabled())
-      and mp.get_property_native('idle-active')
+      -- and mp.get_property_native('idle-active')
    then
          msg.debug('d.tick reload', d.total, s.total)
          reload()
