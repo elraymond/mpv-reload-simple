@@ -1,39 +1,18 @@
--- reload.lua: automatic reloading of network stream when cache doesn't fill.
---
---
--- Generally we react to situations when the player pauses itself because the
--- cache runs empty (event paused-for-cache is fired). When this happens, we
--- start a timer and wait s.max seconds for the player to unpause itself, and
--- when that doesn't happen we do a reload of the stream. So when the player
--- gets stuck, s.max is the maximum time, in seconds, we're willing to wait
--- before performing a reload.
---
--- Additionally, we also monitor the demuxer cache, and how long it didn't
--- receive any updates. And if this time surpasses d.max, we don't even start a
--- timer in the above scenario but reload immediately when the player gets
--- paused. So we choose d.max so that it's a good indicator that the stream
--- indeed is somehow stuck. For HLS streams this value should probably be chosen
--- according to chunk size, but 20 seconds is probably a reasonable number.
---
--- Finally, if we do a reload and it fails there's nothing to play, and mpv
--- would normally shut down. We set the "idle" and "force-window" parameters
--- though, so that the player does stay open. On the other hand, with nothing to
--- play there won't be any pause/unpause events anymore, so that's why we allow
--- for another reload in the demuxer cache timer function, which is performed
--- when the demuxer cache has been stale for d.max seconds and the player is
--- otherwise idle. With this approach, we keep performing reloads each d.max
--- seconds even when one or more reloads fail, so that hopefully sometime the
--- stream comes back.
---
--- And that's already pretty much all this script does. So s.max and d.max are
--- the two values you might want to tune according to your needs.
---
---
+--[[
+
+   reload.lua: automatic reloading of media stream when demuxer cache doesn't
+   fill.
+
+--]]
 
 
 local msg    = require 'mp.msg'
+local http   = require('socket.http')
+local https  = require('ssl.https')
+local ltn12  = require('ltn12')
+
 local d      = {}   -- demuxer cache table
-local path   = ""   -- stream url, gets initialized on load
+local path   = ''   -- stream url, gets initialized on load
 local notify = true -- use notify-send for desktop notification
 
 -- demuxer cache handling, times in seconds
@@ -44,23 +23,65 @@ d.last     = 0  -- last demuxer-cache-time we have seen
 d.total    = 0  -- count of how many seconds d.last has been the same
 d.timer    = nil
 
+-- url redirects depending on mpv window title
+local redirects = {
+   ['MSNBCLNO'] = {
+      url     = 'https://www.livenewsnow.com/american/msnbc.html',
+      pattern = 'file: *"(http.*m3u8)'
+   }
+}
+
+-- module initialization
+http.USERAGENT  = 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.90 Safari/537.36'
+http.TIMEOUT    = 3
+https.USERAGENT = http.USERAGENT
+https.TIMEOUT   = http.TIMEOUT
+
 
 --
 -- demuxer cache related functions
 --
 function d.reset()
-   msg.debug("d.reset")
+   msg.debug('d.reset')
    d.last  = 0
    d.total = 0
+end
+
+function d.disable()
+   if d.timer and d.timer:is_enabled() then
+      msg.info('d.disable')
+      d.timer:kill()
+   end
+end
+
+function d.enable()
+   if d.interval > 0 then
+      msg.info('d.enable')
+      d.timer =
+         mp.add_periodic_timer(
+            d.interval,
+            function()
+               d.tick()
+            end
+         )
+   end
 end
 
 -- to be called by timer
 function d.tick()
 
+   local seekable       = mp.get_property_native('seekable')
    local cache_time     = mp.get_property_native('demuxer-cache-time') or -1
    local cache_duration = mp.get_property_native('demuxer-cache-duration') or -1
-   local ct_rounded     = string.format("%8.2f/%4.1f", cache_time, cache_duration)
+   local ct_rounded     = string.format('%8.2f/%4.1f', cache_time, cache_duration)
 
+   -- don't monitor media files and the likes
+   if seekable then
+      d.disable()
+      return
+   end
+
+   -- check progress on cache, adjust counters accordingly
    if cache_time == d.last then
       msg.debug('d.tick stuck', ct_rounded)
       d.total = d.total + d.interval
@@ -70,8 +91,8 @@ function d.tick()
       d.last = cache_time
    end
 
-   -- when the stream, like an m3u8, goes empty then the paused-for-cache event
-   -- isn't being fired anymore, so we need a fallback reload for that case
+   -- reload when the demuxer cache didn't get data for more than d.max seconds
+   -- and the remaining buffered seconds are less than d.min
    if
       d.total >= d.max and cache_duration < d.min
    then
@@ -86,7 +107,7 @@ end
 --
 
 -- desktop notification
-function desktop_notify(msg)
+local function desktop_notify(msg)
    if notify then
       -- continue script execution if notify-send call fails
       pcall(
@@ -97,22 +118,67 @@ function desktop_notify(msg)
    end
 end
 
-function reload(loadpath)
+-- download url and search for pattern in its html source
+local function http_get_media_url(url, pattern)
 
-   local time_pos = mp.get_property("time-pos")
-   local seekable = mp.get_property_native('seekable')
+      local html = {}
+
+      if pattern == '' then
+         return url
+      end
+
+      if string.match(url, '^https') then
+         https.request{
+            url=url,
+            sink = ltn12.sink.table(html),
+         }
+      else
+         http.request{
+            url=url,
+            sink = ltn12.sink.table(html),
+         }
+      end
+
+      return string.match(table.concat(html), pattern)
+end
+
+local function reload(loadpath)
+
+   local title    = mp.get_property('title') or ''
+   local time_pos = mp.get_property('time-pos') or nil
+   local seekable = mp.get_property_native('seekable') or nil
 
    d.reset()
-   desktop_notify("mpv reload")
+   desktop_notify('reload ' .. title)
 
    if time_pos and seekable then
-      msg.info("reload", loadpath, time_pos)
-      mp.osd_message("Reload: " .. loadpath .. " " .. time_pos)
-      mp.commandv("loadfile", loadpath, "replace", "start=+" .. time_pos)
+      msg.info('reload', loadpath, time_pos)
+      mp.osd_message('Reload: ' .. loadpath .. ' ' .. time_pos)
+      mp.commandv('loadfile', loadpath, 'replace', 'pause=no,start=+' .. time_pos)
    else
-      msg.info("reload", loadpath)
-      mp.osd_message("Reload: " .. loadpath)
-      mp.commandv("loadfile", loadpath, "replace")
+      msg.info('reload', loadpath)
+      mp.osd_message('Reload: ' .. loadpath)
+      mp.commandv('loadfile', loadpath, 'replace', 'pause=no')
+   end
+end
+
+local function on_load_hook()
+
+   local title    = mp.get_property('title')
+   local redirect = redirects[title]
+   local tmp      = ''
+
+   if redirect then
+      tmp = http_get_media_url(redirect['url'], redirect['pattern'])
+      if tmp and tmp ~= '' then
+         path = tmp
+         msg.info('redirecting', path)
+         mp.set_property('stream-open-filename', path)
+      end
+   end
+   if path == '' then
+      path = mp.get_property('stream-open-filename')
+      msg.info('path', path)
    end
 end
 
@@ -123,27 +189,17 @@ end
 
 -- keep window alive in case the stream returns empty on reload,
 -- in which case we just keep reloading according to timer settings
-mp.set_property("idle",         "yes")
-mp.set_property("force-window", "yes")
+mp.set_property('idle',         'yes')
+mp.set_property('force-window', 'yes')
 
 -- on player startup, store stream url in path variable
 mp.add_hook(
-   "on_load",
+   'on_load',
    10,
    function ()
-      if path == "" then
-         path = mp.get_property("stream-open-filename")
-         msg.info("path", path)
-      end
+      on_load_hook()
    end
 )
 
--- demuxer cache handling
-if d.interval > 0 then
-   d.timer = mp.add_periodic_timer(
-      d.interval,
-      function()
-         d.tick()
-      end
-   )
-end
+-- demuxer cache monitoring
+d.enable()
