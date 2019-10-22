@@ -1,5 +1,5 @@
 mpv-reload-simple
------------------
+=================
 
 Lua script to automatically reload streams that get stuck in mpv media player.
 
@@ -7,3 +7,18 @@ Inspired by and very much simplified version of
 https://github.com/4e6/mpv-reload
 
 In particular no EOF and no playlist handling, just that of a simple stream URL.
+
+
+Changelog:
+---------
+
+* Remove paused-for-cache monitoring.
+Reloads are now exlusively done by demuxer cache monitoring, based on two
+factors: how long the cache didn't receive any updates and how many seconds of
+buffered media still remain. This is not only functionally sufficient but also
+provides for an overall smoother reload experience.
+
+* Add HTTP redirection on load.
+Some web sites regularly change their media URL. We added code to optionally
+scan a site for a new URL and redirect to there upon stream load, by means of
+the according hook.
