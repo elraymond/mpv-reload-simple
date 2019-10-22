@@ -29,7 +29,8 @@ local http_get_media_url
 local reload
 local on_load_hook
 
--- url redirects depending on mpv window title
+-- url redirects indexed by mpv media-title; i'm setting that upon mpv startup
+-- with --force-media-title
 local redirects = {
    ['MSNBCLNO'] = {
       url     = 'https://www.livenewsnow.com/american/msnbc.html',
