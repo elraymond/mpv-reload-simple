@@ -23,6 +23,12 @@ d.last     = 0  -- last demuxer-cache-time we have seen
 d.total    = 0  -- count of how many seconds d.last has been the same
 d.timer    = nil
 
+-- functions (forward declarations)
+local desktop_notify
+local http_get_media_url
+local reload
+local on_load_hook
+
 -- url redirects depending on mpv window title
 local redirects = {
    ['MSNBCLNO'] = {
@@ -107,7 +113,7 @@ end
 --
 
 -- desktop notification
-local function desktop_notify(msg)
+desktop_notify = function (msg)
    if notify then
       -- continue script execution if notify-send call fails
       pcall(
@@ -119,7 +125,7 @@ local function desktop_notify(msg)
 end
 
 -- download url and search for pattern in its html source
-local function http_get_media_url(url, pattern)
+http_get_media_url = function (url, pattern)
 
       local html = {}
 
@@ -142,9 +148,9 @@ local function http_get_media_url(url, pattern)
       return string.match(table.concat(html), pattern)
 end
 
-local function reload(loadpath)
+reload = function (loadpath)
 
-   local title    = mp.get_property('title') or ''
+   local title    = mp.get_property('media-title') or ''
    local time_pos = mp.get_property('time-pos') or nil
    local seekable = mp.get_property_native('seekable') or nil
 
@@ -162,9 +168,9 @@ local function reload(loadpath)
    end
 end
 
-local function on_load_hook()
+on_load_hook = function ()
 
-   local title    = mp.get_property('title')
+   local title    = mp.get_property('media-title')
    local redirect = redirects[title]
    local tmp      = ''
 
